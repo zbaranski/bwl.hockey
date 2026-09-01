@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Liest posts.txt (eine Instagram-Post-URL pro Zeile, optional "| Team"),
-prüft gegen _data/processed_posts.json, welche Links neu sind, holt für
-diese per Instagram-oEmbed (seit 15.06.2026 tokenless, kein Meta-App/Token
-nötig) das Vorschaubild + Caption und legt daraus einen Jekyll-Post in
-_posts/ an. Das Bild wird lokal ins Repo heruntergeladen, damit die Seite
-nicht von ablaufenden Instagram-CDN-Links abhängt.
+Liest posts.txt (Instagram-Post-URL, optional "| Team | Titel"), prüft
+gegen _data/processed_posts.json und legt für neue Links einen Jekyll-Post
+an, der den Post per offiziellem Instagram-oEmbed-HTML LIVE einbettet.
 
-Wichtig (Meta-Vorgabe): wer statt des vollen oEmbed-<blockquote>-Embeds
-nur das thumbnail_url-Bild separat anzeigt, muss klar auf den
-Original-Autor + Instagram + den Original-Post verlinken. Das übernimmt
-dieses Skript automatisch in der Post-Fußzeile.
+Wichtig: seit 03.11.2025 liefert die oEmbed-API kein thumbnail_url/
+author_name mehr, und Instagrams oEmbed-Nutzungsbedingungen verbieten es
+ausdrücklich, Bild/Text dauerhaft zu speichern ("persisting the metadata
+and media content" ist untersagt) – erlaubt ist nur eine Live-Einbettung.
+Deshalb: kein Bild-Download mehr, stattdessen das offizielle Embed-HTML
+(<blockquote> + embed.js, das den Post beim Seitenaufruf live lädt).
 """
 
 import json
@@ -26,12 +25,11 @@ OEMBED_ENDPOINT = "https://graph.facebook.com/v25.0/instagram_oembed"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POSTS_TXT = REPO_ROOT / "posts.txt"
 POSTS_DIR = REPO_ROOT / "_posts"
-IMAGES_DIR = REPO_ROOT / "assets" / "instagram"
 PROCESSED_FILE = REPO_ROOT / "_data" / "processed_posts.json"
 
 
-def load_links() -> list[tuple[str, str]]:
-    """Gibt Liste von (url, team) zurück; team ist '' wenn nicht angegeben."""
+def load_links() -> list[tuple[str, str, str]]:
+    """Gibt Liste von (url, team, titel) zurück; leer wenn nicht angegeben."""
     if not POSTS_TXT.exists():
         return []
     links = []
@@ -39,11 +37,11 @@ def load_links() -> list[tuple[str, str]]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if "|" in line:
-            url, team = line.split("|", 1)
-            links.append((url.strip(), team.strip()))
-        else:
-            links.append((line, ""))
+        parts = [p.strip() for p in line.split("|")]
+        url = parts[0]
+        team = parts[1] if len(parts) > 1 else ""
+        titel = parts[2] if len(parts) > 2 else ""
+        links.append((url, team, titel))
     return links
 
 
@@ -59,10 +57,12 @@ def save_processed(urls: set[str]) -> None:
     )
 
 
-def fetch_oembed(post_url: str) -> dict:
+def fetch_oembed_html(post_url: str) -> str:
+    """Holt nur das offizielle Embed-HTML (funktioniert weiterhin tokenless)."""
     query = urllib.parse.urlencode({"url": post_url, "omitscript": "true"})
     with urllib.request.urlopen(f"{OEMBED_ENDPOINT}?{query}") as resp:
-        return json.load(resp)
+        data = json.load(resp)
+    return data.get("html", "")
 
 
 def extract_post_id(post_url: str) -> str:
@@ -70,18 +70,8 @@ def extract_post_id(post_url: str) -> str:
     return match.group(2) if match else re.sub(r"\W+", "-", post_url)[:40]
 
 
-def download_image(image_url: str, dest: Path) -> None:
-    req = urllib.request.Request(image_url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req) as resp:
-        dest.write_bytes(resp.read())
-
-
-def build_post(post_url: str, team: str, oembed: dict, post_id: str, image_rel_path: str) -> str:
-    author = oembed.get("author_name", "")
-    caption = (oembed.get("title") or "").strip()
-    today = date.today().isoformat()
-
-    title = caption.splitlines()[0] if caption else f"Instagram-Post von {author or 'BWL'}"
+def build_post(post_url: str, team: str, titel: str, embed_html: str, post_id: str) -> str:
+    title = titel or f"Instagram-Post{f' – {team}' if team else ''}"
     title = title.replace('"', "'")[:100]
 
     front_matter = [
@@ -89,17 +79,14 @@ def build_post(post_url: str, team: str, oembed: dict, post_id: str, image_rel_p
         "layout: default",
         f'title: "{title}"',
         f'team: "{team}"',
-        f'source_author: "{author}"',
         f'instagram_permalink: "{post_url}"',
         "---",
         "",
     ]
 
-    body = [f"![]({image_rel_path})", ""]
-    if caption:
-        body.append(caption)
-        body.append("")
-    body.append(f"*Repost von [@{author}]({post_url}) auf Instagram — [Original-Post ansehen]({post_url})*")
+    # Rohes Embed-HTML direkt einbetten — embed.js (im Layout eingebunden)
+    # rendert Bild+Caption beim Seitenaufruf live von Instagram.
+    body = [embed_html, ""]
 
     return "\n".join(front_matter + body)
 
@@ -108,30 +95,26 @@ def main() -> None:
     links = load_links()
     processed = load_processed()
 
-    new_links = [(url, team) for url, team in links if url not in processed]
+    new_links = [(url, team, titel) for url, team, titel in links if url not in processed]
     if not new_links:
         print("Keine neuen Links in posts.txt.")
         return
 
-    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     POSTS_DIR.mkdir(exist_ok=True)
 
-    for url, team in new_links:
+    for url, team, titel in new_links:
         post_id = extract_post_id(url)
         try:
-            oembed = fetch_oembed(url)
+            embed_html = fetch_oembed_html(url)
         except Exception as exc:  # noqa: BLE001
             print(f"Fehler bei {url}: {exc}", file=sys.stderr)
             continue
 
-        thumbnail_url = oembed.get("thumbnail_url")
-        image_rel_path = ""
-        if thumbnail_url:
-            image_filename = f"{post_id}.jpg"
-            download_image(thumbnail_url, IMAGES_DIR / image_filename)
-            image_rel_path = f"/assets/instagram/{image_filename}"
+        if not embed_html:
+            print(f"Kein Embed-HTML für {url} erhalten — übersprungen.", file=sys.stderr)
+            continue
 
-        content = build_post(url, team, oembed, post_id, image_rel_path)
+        content = build_post(url, team, titel, embed_html, post_id)
         filename = f"{date.today().isoformat()}-{post_id}.md"
         (POSTS_DIR / filename).write_text(content, encoding="utf-8")
         print(f"Neuer Post angelegt: {filename}")

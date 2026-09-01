@@ -1,0 +1,5 @@
+# Ein Instagram-Post-Link pro Zeile.
+# Optional Team-Tag mit | anhängen, z.B.:
+# https://www.instagram.com/p/ABC123/ | SERC04 Firewings
+#
+# Zeilen mit # werden ignoriert.

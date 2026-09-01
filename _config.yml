@@ -1,0 +1,20 @@
+title: BWL Eishockey
+description: News, Reposts und Infos rund um die Baden-Württemberg Liga Eishockey
+url: "https://bwl.hockey"
+baseurl: ""
+
+# Instagram-Reposts landen als normale Jekyll-Posts in _posts/
+# und tauchen damit automatisch in der Startseiten-Liste auf.
+permalink: /post/:year/:month/:day/:title/
+
+markdown: kramdown
+theme: minima
+
+# Damit Jekyll unsere Sync-Skripte/Workflows nicht mitverarbeitet:
+exclude:
+  - scripts/
+  - README.md
+  - Gemfile.lock
+
+plugins:
+  - jekyll-feed

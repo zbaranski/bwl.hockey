@@ -1,7 +1,7 @@
 title: BWL Eishockey
 description: News, Reposts und Infos rund um die Baden-Württemberg Liga Eishockey
 url: ""
-baseurl: ""
+baseurl: "/bwl.hockey"
 
 # Instagram-Reposts landen als normale Jekyll-Posts in _posts/
 # und tauchen damit automatisch in der Startseiten-Liste auf.
